@@ -1,0 +1,56 @@
+{
+  "orgs": {
+    "you@example.com.devsandbox": {
+      "alias": "DevSandbox",
+      "note": "personal dev sandbox: the agent works freely, data changes need a yes",
+      "read": "allow",
+      "validate": "allow",
+      "deploy": "allow",
+      "data": "ask",
+      "execute": "ask",
+      "agent": "allow",
+      "admin": "deny"
+    },
+    "you@example.com.uat": {
+      "alias": "UAT",
+      "note": "shared test sandbox: look and validate, everything else asks",
+      "read": "allow",
+      "validate": "allow",
+      "deploy": "ask",
+      "data": "ask",
+      "execute": "ask",
+      "agent": "ask",
+      "admin": "deny"
+    },
+    "you@example.com": {
+      "alias": "Production",
+      "note": "production: read and validate with a prompt, nothing else",
+      "read": "ask",
+      "validate": "ask",
+      "deploy": "deny",
+      "data": "deny",
+      "execute": "deny",
+      "agent": "deny",
+      "admin": "deny"
+    }
+  },
+  "defaultOrgPolicy": {
+    "read": "deny",
+    "validate": "deny",
+    "deploy": "deny",
+    "data": "deny",
+    "execute": "deny",
+    "agent": "deny",
+    "admin": "deny"
+  },
+  "scripts": {
+    "scripts/load-demo-data.sh": {
+      "categories": ["data"],
+      "orgFlag": "-o",
+      "defaultOrg": "DevSandbox"
+    }
+  },
+  "commands": {
+    "myplugin run": "execute"
+  }
+}
