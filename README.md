@@ -24,16 +24,21 @@ that register it, so the agent can't widen its own access by mistake.
 
 ## Install
 
-Requires Python 3.9+ and Claude Code.
+Requires the [Salesforce CLI](https://developer.salesforce.com/tools/salesforcecli) and Claude Code. Nothing
+else: the hook is plain JavaScript and runs on the Node.js that ships with the Salesforce CLI, so you don't
+need to install Python or Node.js yourself.
 
 ```sh
 git clone <this repo> skipper-org-policy-hook
 cd skipper-org-policy-hook
-python3 install.py
+sh install.sh
 ```
 
-This copies `sf-org-guard.py` to `~/.claude/hooks/` (or `$CLAUDE_CONFIG_DIR/hooks/` if you use a custom
-config dir, or pass `--config-dir DIR`), and adds to `settings.json`:
+(No git? Download the repo as a ZIP, unzip it, and run `sh install.sh` in that folder.)
+
+This copies `sf-org-guard.js` to `~/.claude/hooks/` (or `$CLAUDE_CONFIG_DIR/hooks/` if you use a custom
+config dir, or pass `--config-dir DIR`), next to a small `sf-org-guard` launcher that runs it with the
+Salesforce CLI's Node.js (or any `node` on your PATH). It adds to `settings.json`:
 
 - a **SessionStart** hook: in a Salesforce project without a policy, the agent asks you to create one
 - a **PreToolUse** hook on Bash, Edit, Write, MultiEdit and NotebookEdit: does the actual checking
@@ -41,18 +46,18 @@ config dir, or pass `--config-dir DIR`), and adds to `settings.json`:
 
 Your old settings are saved as `settings.json.bak`. Restart Claude Code afterwards.
 
-**Updating:** `git pull && python3 install.py`. Running it again replaces the hook and leaves settings that
-are already there alone.
+**Updating:** `git pull && sh install.sh`. Running it again replaces the hook and leaves settings that are
+already there alone. If you had the earlier Python version installed, it replaces that too.
 
 ## Set up a project
 
 Run these yourself in the project folder (in Claude Code, type them with a `!` in front):
 
 ```sh
-python3 ~/.claude/hooks/sf-org-guard.py --init                    # creates .claude/org-policy.json, all deny
-python3 ~/.claude/hooks/sf-org-guard.py --set DevSandbox read=allow validate=allow deploy=allow data=ask
-python3 ~/.claude/hooks/sf-org-guard.py --set Production read=ask
-python3 ~/.claude/hooks/sf-org-guard.py --show                    # see the result as a table
+~/.claude/hooks/sf-org-guard --init                    # creates .claude/org-policy.json, all deny
+~/.claude/hooks/sf-org-guard --set DevSandbox read=allow validate=allow deploy=allow data=ask
+~/.claude/hooks/sf-org-guard --set Production read=ask
+~/.claude/hooks/sf-org-guard --show                    # see the result as a table
 ```
 
 `--init` adds the project's default org (from `.sf/config.json`) with everything on deny. `--set` accepts an
@@ -67,7 +72,7 @@ username, which differs per person, so each colleague usually adds their own org
 To see what the hook would do with a command, without running it:
 
 ```sh
-python3 ~/.claude/hooks/sf-org-guard.py --check "sf project deploy start -o UAT"
+~/.claude/hooks/sf-org-guard --check "sf project deploy start -o UAT"
 ```
 
 ## Decisions
@@ -114,7 +119,7 @@ Which commands fall where:
 Scratch org creation and package versions are checked against the **Dev Hub** org (`-v` /
 `--target-dev-hub`), not the target org.
 
-The full mapping is the `COMMANDS` table in `sf-org-guard.py`, where the longest matching command prefix
+The full mapping is the `COMMANDS` table in `sf-org-guard.js`, where the longest matching command prefix
 wins.
 
 ## The policy file
@@ -143,5 +148,8 @@ This is a guardrail against mistakes, not a security sandbox.
 
 ## Uninstall
 
-Remove the two `sf-org-guard.py` entries under `hooks` and the related `permissions.deny` rules from your
-Claude Code `settings.json`, then delete `~/.claude/hooks/sf-org-guard.py`.
+Remove the two `sf-org-guard` entries under `hooks` and the related `permissions.deny` rules from your
+Claude Code `settings.json`, then delete `~/.claude/hooks/sf-org-guard` and `~/.claude/hooks/sf-org-guard.js`.
+
+Windows: untested. Claude Code on Windows runs hooks through Git Bash, so `sh install.sh` from Git Bash
+should work, but nobody has tried it yet.
