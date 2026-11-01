@@ -12,7 +12,7 @@ it from changing anything in production.
 1. Before every Bash command, Claude Code runs the hook. The hook finds every `sf` / `sfdx` call in the
    command, including ones inside `bash -c`, `eval`, `$(...)`, `npx`, `env` and heredocs, and calls from
    project scripts you list in the policy.
-2. Each call is sorted into a **category** (read, validate, deploy, data, execute, agent, admin).
+2. Each call is sorted into a **category** (read, validate, deploy, data, delete, execute).
 3. It works out the **target org** the same way the sf CLI does: `-o` / `--target-org`, `SF_TARGET_ORG`,
    the project's `.sf/config.json`, then the global config. The alias is turned into a username.
 4. The policy for that username and category gives the **decision**: `allow`, `ask` or `deny`.
@@ -90,18 +90,17 @@ categories, the strictest decision wins.
 
 ## Categories
 
-Every sf command belongs to exactly one category. The "Typical" column is a suggestion, so set what fits
-the org.
+Every sf command belongs to one category. A command that deletes something also needs **delete**, on top
+of its own category. The "Typical" column is a suggestion, so set what fits the org.
 
 | Category | What it lets the agent do | Worst case | Typical |
 |---|---|---|---|
 | **read** | Look, don't touch: see metadata, query records, retrieve source into the project. | Sees data it shouldn't (`data export` can dump whole objects). `org display --verbose` and `org open` hand out a logged-in session. | allow on sandboxes and dev orgs; ask on production |
 | **validate** | Dry-run a deploy: the org compiles the metadata and may run tests, then rolls everything back. | Long test runs. Nothing is saved. | allow wherever deploy is allow or ask, production included |
-| **deploy** | Change the org's configuration and code: objects, fields, flows, Apex, layouts, permission sets as metadata. Also delete components. | Breaks automation, or deletes a field and its data with it. | allow on dev and scratch orgs; ask on shared sandboxes; deny on production |
-| **data** | Create, change or delete records (Accounts, Cases, …), including bulk imports. | Mass update or delete of business data. Redeploying doesn't undo it. | allow on demo and scratch orgs; ask on sandboxes with real data; deny on production |
-| **execute** | Run code in the org: anonymous Apex, Apex tests, agent previews and agent test runs. | Anonymous Apex can do anything the org user can, including changing records, so this is at least as powerful as **data**. Agent previews and tests may run the agent's actions for real. | ask, unless the org's data is disposable |
-| **agent** | Build and switch Agentforce agents: create one, publish a new version, activate or deactivate it. | Activating changes what real users or customers talk to. | allow on dev orgs; ask or deny where an agent is live |
-| **admin** | Control who gets in and which orgs exist: permission sets, users, password resets, package installs, sandboxes and scratch orgs, Experience Cloud sites. | Grants someone access, or deletes or refreshes (wipes) a sandbox. | deny; ask on the Dev Hub if the agent should create scratch orgs |
+| **deploy** | Change the org's setup: objects, fields, flows, Apex, layouts, permission sets and who has them. Also Agentforce agents, packages and Experience Cloud sites. | Breaks automation, grants someone access, or activates an agent that real users or customers talk to. | allow on dev and scratch orgs; ask on shared sandboxes; deny on production |
+| **data** | Create or change records (Accounts, Cases, …), including bulk imports. | A mass update overwrites business data. Redeploying doesn't undo it. | allow on demo and scratch orgs; ask on sandboxes with real data; deny on production |
+| **delete** | An extra check on anything that deletes: records, metadata, packages, or a whole sandbox or scratch org. | Deleting a field or object takes its data with it. A deleted or refreshed sandbox is gone. | ask on scratch orgs and personal dev sandboxes; deny elsewhere |
+| **execute** | Run code in the org: anonymous Apex, Apex tests, agent previews and agent test runs. | Anonymous Apex can do anything the org user can, including changing and deleting records, so this is at least as powerful as **data** and **delete**. Agent previews and tests may run the agent's actions for real. | ask, unless the org's data is disposable |
 
 Which commands fall where:
 
@@ -109,15 +108,45 @@ Which commands fall where:
 |---|---|
 | read | `data query/get/search/export`, `project retrieve`, `org display/open/list`, `sobject describe`, `apex list/get/tail log`, `agent list/validate/generate`, `package list`, `api request rest` (GET) |
 | validate | `project deploy validate`, `project deploy start --dry-run` |
-| deploy | `project deploy start/quick/resume`, `project delete source`, `force source push/deploy/delete`, `force mdapi deploy` |
-| data | `data create/update/delete/upsert/import/bulk/tree`, `api request rest` (non-GET), `api request graphql`, `sfdmu` |
+| deploy | `project deploy start/quick/resume`, `force source push/deploy`, `force mdapi deploy`, `org assign permset`, `org create user`, `org generate password`, `package install/create/version`, `agent create/publish/activate/deactivate`, `agent test create`, `community create/publish` |
+| data | `data create/update/upsert/import/bulk/tree`, `api request rest` (POST/PUT/PATCH), `api request graphql`, `sfdmu` |
 | execute | `apex run`, `apex run test`, `agent preview`, `agent test run` |
-| agent | `agent create/publish/activate/deactivate`, `agent test create` |
-| admin | `org assign permset`, `org create user/sandbox/scratch`, `org delete`, `org refresh/resume`, `org generate password`, `package install/create/version`, `community create/publish` |
 | *(local)* | Never touch an org, so never checked: `help`, `config`, `alias`, `org login/logout`, `org list`, `project generate/convert`, `apex generate`, … |
 
-Scratch org creation and package versions are checked against the **Dev Hub** org (`-v` /
-`--target-dev-hub`), not the target org.
+### Delete
+
+These need **delete** as well as the category shown, and the strictest of the two wins:
+
+| Command | Needs |
+|---|---|
+| `data delete record/bulk`, `api request rest -X DELETE` | data + delete |
+| `project delete source`, `force source delete` | deploy + delete |
+| a deploy with `--pre-destructive-changes` / `--post-destructive-changes`, or with a `destructiveChanges.xml` in the deploy folder | deploy + delete |
+| `package uninstall`, `package delete`, `package version delete` | deploy + delete |
+| `org delete sandbox/scratch` | delete, on the org being deleted |
+| `org refresh sandbox` (wipes the sandbox) | delete, on the production org it runs against |
+
+Overwriting values with `data update`, `upsert` or `import` is **data**, not delete.
+
+Delete only catches deletes it can see in the command. These count as their own category only:
+
+- a file you deleted locally is deleted in the org by the next `project deploy start` with source tracking
+  (deploy)
+- `apex run` can delete records (execute)
+- `sfdmu` can be configured to delete (data)
+- a deploy from a `.zip`, or `project deploy quick` of a validation that included deletes (deploy)
+
+### Fixed rules
+
+These aren't settings. They're the same in every org:
+
+| Command | Decision |
+|---|---|
+| `org create sandbox`, `org resume sandbox` | always deny: a human creates sandboxes |
+| `org create scratch`, `org resume scratch` | always ask |
+
+Package versions are checked against the **Dev Hub** org (`-v` / `--target-dev-hub`), not the target
+org.
 
 The full mapping is the `COMMANDS` table in `sf-org-guard.js`, where the longest matching command prefix
 wins.

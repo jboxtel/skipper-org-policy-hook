@@ -2,25 +2,23 @@
   "orgs": {
     "you@example.com.devsandbox": {
       "alias": "DevSandbox",
-      "note": "personal dev sandbox: the agent works freely, data changes need a yes",
+      "note": "personal dev sandbox: the agent works freely, data changes and deletes need a yes",
       "read": "allow",
       "validate": "allow",
       "deploy": "allow",
       "data": "ask",
-      "execute": "ask",
-      "agent": "allow",
-      "admin": "deny"
+      "delete": "ask",
+      "execute": "ask"
     },
     "you@example.com.uat": {
       "alias": "UAT",
-      "note": "shared test sandbox: look and validate, everything else asks",
+      "note": "shared test sandbox: look and validate, changes ask, no deletes",
       "read": "allow",
       "validate": "allow",
       "deploy": "ask",
       "data": "ask",
-      "execute": "ask",
-      "agent": "ask",
-      "admin": "deny"
+      "delete": "deny",
+      "execute": "ask"
     },
     "you@example.com": {
       "alias": "Production",
@@ -29,9 +27,8 @@
       "validate": "ask",
       "deploy": "deny",
       "data": "deny",
-      "execute": "deny",
-      "agent": "deny",
-      "admin": "deny"
+      "delete": "deny",
+      "execute": "deny"
     }
   },
   "defaultOrgPolicy": {
@@ -39,9 +36,8 @@
     "validate": "deny",
     "deploy": "deny",
     "data": "deny",
-    "execute": "deny",
-    "agent": "deny",
-    "admin": "deny"
+    "delete": "deny",
+    "execute": "deny"
   },
   "scripts": {
     "scripts/load-demo-data.sh": {

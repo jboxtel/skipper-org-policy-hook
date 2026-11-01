@@ -6,10 +6,11 @@ Salesforce CLI.
 
 Every Bash command is scanned for `sf` / `sfdx` invocations (also inside `bash -c`, `eval`, `$(...)`,
 `npx`, `env`, ...) and for the project scripts listed in the project's .claude/org-policy.json. Each
-invocation is classified into a category (read, validate, deploy, data, execute, agent, admin, or local)
+invocation is classified into a category (read, validate, deploy, data, delete, execute, or local)
 and its target org is resolved the same way the sf CLI does: --target-org / -o flag, SF_TARGET_ORG,
 project .sf/config.json, global config. The alias is resolved to a username, and the username's policy
-decides: allow, ask, or deny. Anything it cannot classify or resolve is denied (fail closed).
+decides: allow, ask, or deny. Anything that deletes also needs the delete category. Creating sandboxes
+and scratch orgs follows fixed rules instead. Anything it cannot classify or resolve is denied (fail closed).
 
 The policy is per project: <project>/.claude/org-policy.json. A project without one cannot reach any
 org; the human creates it with --init. In a Salesforce project (sfdx-project.json) without a policy,
@@ -51,7 +52,13 @@ const CLI_DISPLAY = fs.existsSync(LAUNCHER) ? tildePath(LAUNCHER) : `node ${tild
 let PROJECT_ROOT = process.cwd();
 let POLICY_PATH = path.join(PROJECT_ROOT, '.claude', 'org-policy.json');
 
-const CATEGORIES = ['read', 'validate', 'deploy', 'data', 'execute', 'agent', 'admin'];
+const CATEGORIES = ['read', 'validate', 'deploy', 'data', 'delete', 'execute'];
+// Categories that were merged into another one; older policy files may still name them.
+const RENAMED = { agent: 'deploy' };
+const ADMIN_GONE = "'admin' no longer exists: users, permission sets and packages are part of deploy; "
+  + 'deleting orgs is part of delete; creating sandboxes is always denied and creating scratch orgs always asks';
+// Not settings: these always get the same decision, whatever the policy says.
+const FIXED = { sandbox: 'deny', scratch: 'ask' };
 const DECISIONS = ['allow', 'ask', 'deny'];
 const RANK = { allow: 0, ask: 1, deny: 2 };
 
@@ -87,41 +94,52 @@ const README = [
   '            Typical: allow wherever deploy is allow or ask, production included.',
   '            Commands: project deploy validate, project deploy start --dry-run',
   '',
-  '  deploy    Change the org\'s configuration and code: objects, fields, flows, Apex, layouts,',
-  '            permission sets as metadata. project delete source removes components.',
-  '            Worst case: breaks automation, or deletes a field and with it its data.',
+  '  deploy    Change the org\'s setup: objects, fields, flows, Apex, layouts, permission sets,',
+  '            and who has them. Also Agentforce agents, packages and Experience Cloud sites.',
+  '            Worst case: breaks automation, grants someone access, or activates an agent that',
+  '            real users or customers talk to.',
   '            Typical: allow on dev and scratch orgs; ask on shared sandboxes; deny on production.',
-  '            Commands: project deploy start/quick/resume, project delete source,',
-  '            force source push/deploy/delete, force mdapi deploy',
+  '            Commands: project deploy start/quick/resume, force source push/deploy,',
+  '            force mdapi deploy, project delete source (also delete), org assign permset, org create user, org generate password,',
+  '            package install/create/version, agent create/publish/activate/deactivate,',
+  '            agent test create, community create/publish',
   '',
-  '  data      Create, change or delete records (Accounts, Cases, ...), including bulk imports.',
-  '            Worst case: mass update or delete of business data; redeploying does not undo it.',
+  '  data      Create or change records (Accounts, Cases, ...), including bulk imports.',
+  '            Worst case: a mass update overwrites business data; redeploying does not undo it.',
   '            Typical: allow on demo and scratch orgs; ask on sandboxes with real data;',
   '            deny on production.',
-  '            Commands: data create/update/delete/upsert/import/bulk/tree,',
-  '            api request rest (non-GET), api request graphql, sfdmu',
+  '            Commands: data create/update/upsert/import/bulk/tree,',
+  '            api request rest (POST/PUT/PATCH), api request graphql, sfdmu',
+  '',
+  '  delete    An extra check on anything that deletes: records, metadata, packages, or a whole',
+  '            sandbox or scratch org. A command that deletes needs both its own category and',
+  '            delete: deleting records needs data and delete, a deploy that removes',
+  '            components needs deploy and delete. Deleting or refreshing (wiping) an org',
+  '            needs only delete, on the org that is deleted (refresh: the production org).',
+  '            Overwriting values (data update/upsert/import) is data, not delete.',
+  '            Worst case: deleting a field or object takes its data with it; a deleted or',
+  '            refreshed sandbox is gone.',
+  '            Typical: ask on scratch orgs and personal dev sandboxes; deny elsewhere.',
+  '            Commands: data delete, project delete source, force source delete,',
+  '            deploys with --pre/--post-destructive-changes or a destructiveChanges.xml in',
+  '            the deploy folder, package uninstall/delete, api request rest -X DELETE,',
+  '            org delete sandbox/scratch, org refresh sandbox',
+  '            Not caught: deletes the command does not show. A file you deleted locally is',
+  '            deleted in the org by the next tracked deploy, anonymous Apex can delete',
+  '            records, and sfdmu can be configured to delete. Those count as deploy, execute',
+  '            and data.',
   '',
   '  execute   Run code in the org. Anonymous Apex runs as the org user and can do anything',
-  '            they can, including changing records, so execute=allow is at least as powerful',
-  '            as data=allow. Apex tests roll back their own data. Agent previews and test runs',
-  '            talk to the agent in the org and may run its actions for real.',
+  '            they can, including changing and deleting records, so execute=allow is at least',
+  '            as powerful as data=allow and delete=allow. Apex tests roll back their own data.',
+  '            Agent previews and test runs talk to the agent in the org and may run its',
+  '            actions for real.',
   '            Typical: ask, unless the org\'s data is disposable.',
   '            Commands: apex run, apex run test, agent preview, agent test run',
   '',
-  '  agent     Build and switch Agentforce agents: create one, publish a new version, activate',
-  '            or deactivate it. Activating changes what real users or customers talk to.',
-  '            Typical: allow on dev orgs; ask or deny where an agent is live.',
-  '            Commands: agent create/publish/activate/deactivate, agent test create',
-  '',
-  '  admin     Who can get in and which orgs exist: assign permission sets, create users, reset',
-  '            passwords, install packages, create/delete/refresh sandboxes and scratch orgs,',
-  '            publish Experience Cloud sites. Scratch orgs and package versions are checked',
-  '            against the Dev Hub org, not the target org.',
-  '            Worst case: grants someone access, or deletes or refreshes (wipes) a sandbox.',
-  '            Typical: deny; ask on the Dev Hub if the agent should create scratch orgs.',
-  '            Commands: org assign permset, org create user/sandbox/scratch, org delete,',
-  '            org refresh/resume, org generate password, package install/create/version,',
-  '            community create/publish',
+  'FIXED RULES (not settings, the same in every org)',
+  '  creating a sandbox      always denied; a human does this (also org resume sandbox)',
+  '  creating a scratch org  always asks (also org resume scratch)',
   '',
   '  (local)   Never touches an org, so never checked: help, config, alias, org login/logout,',
   '            org list, project generate/convert, apex generate, ...',
@@ -169,18 +187,21 @@ const COMMANDS = {
   // validate (check-only)
   'project deploy validate': 'validate',
   // deploy
-  'project deploy': 'deploy', 'project delete source': 'deploy', 'deploy metadata': 'deploy',
+  'project deploy': 'deploy', 'deploy metadata': 'deploy',
+  'agent publish': 'deploy', 'agent activate': 'deploy', 'agent deactivate': 'deploy',
+  'agent create': 'deploy', 'agent test create': 'deploy',
+  'org assign': 'deploy', 'org create user': 'deploy', 'org generate password': 'deploy',
+  'package': 'deploy', 'community': 'deploy',
   // data
   'data': 'data', 'api request graphql': 'data', 'sfdmu': 'data',
+  'project delete source': 'deploy',
+  // deleting orgs (any other command that deletes also needs delete: see DELETE_COMMANDS)
+  'org delete': 'delete', 'org refresh': 'delete',
   // execute
   'apex run': 'execute', 'agent preview': 'execute', 'agent test': 'execute',
-  // agent
-  'agent publish': 'agent', 'agent activate': 'agent', 'agent deactivate': 'agent',
-  'agent create': 'agent', 'agent test create': 'agent',
-  // admin
-  'org assign': 'admin', 'org create': 'admin', 'org delete': 'admin', 'org resume': 'admin',
-  'org refresh': 'admin', 'org generate password': 'admin', 'package': 'admin',
-  'community': 'admin',
+  // fixed rules; any other org create/resume is treated as a sandbox
+  'org create': 'sandbox', 'org resume': 'sandbox',
+  'org create scratch': 'scratch', 'org resume scratch': 'scratch',
   // legacy sfdx (force:...)
   'force source deploy': 'deploy', 'force source push': 'deploy', 'force source delete': 'deploy',
   'force mdapi deploy': 'deploy', 'force source retrieve': 'read', 'force source pull': 'read',
@@ -191,7 +212,16 @@ const COMMANDS = {
 };
 
 // commands whose org is the Dev Hub, not the target org
-const DEV_HUB_COMMANDS = ['org create scratch', 'package create', 'package version'];
+const DEV_HUB_COMMANDS = ['package create', 'package version', 'package delete'];
+
+// commands that delete, on top of their own category
+const DELETE_COMMANDS = ['data delete', 'project delete source', 'force source delete', 'force data record delete',
+  'force data bulk delete', 'package uninstall', 'package delete', 'package version delete'];
+
+// deploy flags and files that make a deploy delete components as well
+const DESTRUCTIVE_FLAGS = new Set(['--pre-destructive-changes', '--post-destructive-changes',
+  '--predestructivechanges', '--postdestructivechanges']);
+const DEPLOY_DIR_FLAGS = new Set(['--metadata-dir', '--deploydir', '-d', '--source-dir']);
 
 const TARGET_FLAGS = new Set(['-o', '--target-org', '--targetusername', '--target-username']);
 const DEV_HUB_FLAGS = new Set(['-v', '--target-dev-hub', '--targetdevhubusername']);
@@ -714,7 +744,12 @@ function analyseScript(script, args, localEnv, ctx, findings) {
     let org = (rule.orgFlag && flagValue(args, new Set([rule.orgFlag]), false)) || rule.defaultOrg;
     if (!org) throw new Blocked(`${rel} has no org flag or defaultOrg in the policy`);
     org = expand(String(org), { ...ctx.vars, ...localEnv });
-    for (const category of rule.categories || ['admin']) {
+    for (let category of rule.categories || CATEGORIES) {
+      category = RENAMED[category] || category;
+      if (!CATEGORIES.includes(category)) {
+        throw new Blocked(`${rel} declares unknown category '${category}' in the policy`
+          + (category === 'admin' ? ` (${ADMIN_GONE})` : ''));
+      }
       findings.push({ what: rel, category, org, source: `${rule.orgFlag || '(no flag)'} / script default` });
     }
   }
@@ -728,7 +763,7 @@ function classify(words, flags, overrides) {
     if ((key === prefix || key.startsWith(prefix + ' ')) && (best === null || prefix.length > best.length)) best = prefix;
   }
   if (best === null) return [null, key];
-  let category = table[best];
+  let category = RENAMED[table[best]] || table[best];
   if (best === 'project deploy' && words.slice(0, 3).join(' ') === 'project deploy start' && flags.includes('--dry-run')) {
     category = 'validate';
   }
@@ -745,9 +780,11 @@ function analyseSf(cmd, args, localEnv, ctx, findings) {
   if (!words.length || flags.some((f) => f === '-h' || f === '--help')) return;
   let category;
   let key;
+  let deletes = false;
   if (words[0] === 'api' && words[1] === 'request' && words[2] === 'rest') {
     const method = (flagValue(flags, new Set(['-X', '--method']), false) || 'GET').toUpperCase();
     [category, key] = [method === 'GET' ? 'read' : 'data', words.join(' ')];
+    deletes = method === 'DELETE';
   } else {
     [category, key] = classify(words, flags, ctx.policy.commands);
   }
@@ -757,7 +794,17 @@ function analyseSf(cmd, args, localEnv, ctx, findings) {
       + 'in .claude/org-policy.json');
   }
   if (category === 'local') return;
-  if (!CATEGORIES.includes(category)) throw new Blocked(`'${what}' is mapped to unknown category '${category}'`);
+  if (Object.hasOwn(FIXED, category)) {
+    findings.push({ what, category, org: null, source: 'fixed rule' });
+    return;
+  }
+  if (!CATEGORIES.includes(category)) {
+    throw new Blocked(`'${what}' is mapped to unknown category '${category}'`
+      + (category === 'admin' ? ` (${ADMIN_GONE})` : ''));
+  }
+  deletes ||= DELETE_COMMANDS.some((p) => key === p || key.startsWith(p + ' '))
+    || (category === 'deploy' && deletesMetadata(flags, ctx.cwd));
+  const categories = deletes && category !== 'delete' ? [category, 'delete'] : [category];
 
   const devHub = DEV_HUB_COMMANDS.some((p) => key === p || key.startsWith(p + ' '));
   const legacyU = cmd === 'sfdx' || words[0] !== 'agent';
@@ -784,7 +831,19 @@ function analyseSf(cmd, args, localEnv, ctx, findings) {
     source = `default from ${source}`;
   }
   org = expand(org, { ...ctx.vars, ...localEnv });
-  findings.push({ what, category, org, source });
+  for (const c of categories) findings.push({ what, category: c, org, source });
+}
+
+/** Whether a deploy visibly deletes components: destructive-changes flags, or such a file in the deploy folder. */
+function deletesMetadata(flags, cwd) {
+  if (flags.some((f) => DESTRUCTIVE_FLAGS.has(f.split('=')[0]))) return true;
+  const dir = flagValue(flags, DEPLOY_DIR_FLAGS, false);
+  if (!dir) return false;
+  try {
+    return fs.readdirSync(path.resolve(cwd, dir)).some((n) => /^destructiveChanges(Pre|Post)?\.xml$/i.test(n));
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------- entry points
@@ -816,8 +875,16 @@ function evaluate(command, cwd) {
   if (problem) return ['deny', `sf-org-guard: ${problem}`];
   const aliases = loadAliases();
   let worst = 'allow';
+  let fixedDeny = false;
   const lines = [];
   for (const f of findings) {
+    if (Object.hasOwn(FIXED, f.category)) {
+      const d = FIXED[f.category];
+      if (RANK[d] > RANK[worst]) worst = d;
+      if (d === 'deny') fixedDeny = true;
+      lines.push(`${f.what} [${f.category === 'sandbox' ? 'creating a sandbox' : 'creating a scratch org'}: always ${d.toUpperCase()}]`);
+      continue;
+    }
     let user;
     try {
       user = toUsername(f.org, aliases);
@@ -830,7 +897,10 @@ function evaluate(command, cwd) {
     lines.push(`${f.what} -> ${orgLabel(user, policy)} [${f.category}: ${d.toUpperCase()}] (org via ${f.source})`);
   }
   let reason = 'sf-org-guard: ' + lines.join('; ');
-  if (worst === 'deny') {
+  if (fixedDeny) {
+    reason += '. Creating sandboxes is reserved for a human. Do not work around this; '
+      + 'tell the human what you wanted to do.';
+  } else if (worst === 'deny') {
     reason += `. Blocked by ${POLICY_PATH}. Do not work around this; ask the human to change the `
       + 'policy if the action is intended.';
   }
@@ -921,6 +991,7 @@ function show() {
   for (const [alias, user, e] of rows) {
     console.log(`${alias.padEnd(w)}  ${CATEGORIES.map((c) => String(e[c] ?? 'deny').padEnd(8)).join('  ')}  ${user}`);
   }
+  console.log('\nfixed, in every org: creating a sandbox always deny; creating a scratch org always ask');
 }
 
 function addOrg(policy, org, aliases) {
@@ -961,10 +1032,15 @@ function setPolicy(org, assignments) {
   for (const a of assignments) {
     const [cat, dec] = [a.split('=')[0], a.split('=').slice(1).join('=')];
     const cats = cat === 'all' ? CATEGORIES : [cat];
+    if (cat === 'admin') fail(ADMIN_GONE);
+    if (Object.hasOwn(RENAMED, cat)) fail(`'${cat}' is now part of '${RENAMED[cat]}'; set ${RENAMED[cat]}=${dec} instead`);
     if (cats.some((c) => !CATEGORIES.includes(c)) || !DECISIONS.includes(dec)) {
       fail(`bad assignment '${a}': use <${CATEGORIES.join('|')}|all>=<${DECISIONS.join('|')}>`);
     }
     for (const c of cats) entry[c] = dec;
+  }
+  for (const e of [...Object.values(policy.orgs), policy.defaultOrgPolicy]) {
+    if (isObject(e)) for (const old of [...Object.keys(RENAMED), 'admin']) delete e[old];
   }
   delete policy._readme;
   writePolicy({ _readme: README, ...policy });
