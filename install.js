@@ -101,13 +101,15 @@ function main(argv) {
     preToolUse.push({ matcher: 'Bash|Edit|Write|MultiEdit|NotebookEdit', hooks: [{ type: 'command', command }] });
   }
 
-  const deny = ((settings.permissions ??= {}).deny ??= []);
-  for (const tool of ['Edit', 'Write']) {
-    for (const target of [`${rulePath(hooksDir)}/**`, rulePath(settingsPath), '.claude/org-policy.json']) {
-      const rule = `${tool}(${target})`;
-      if (!deny.includes(rule)) deny.push(rule);
-    }
+  // Edit(...) rules cover every file-editing tool; Write(...) rules never match, so drop the ones
+  // earlier versions of this installer added.
+  const permissions = (settings.permissions ??= {});
+  const targets = [`${rulePath(hooksDir)}/**`, rulePath(settingsPath), '.claude/org-policy.json'];
+  const deny = (permissions.deny ?? []).filter((r) => !targets.some((t) => r === `Write(${t})`));
+  for (const target of targets) {
+    if (!deny.includes(`Edit(${target})`)) deny.push(`Edit(${target})`);
   }
+  permissions.deny = deny;
 
   fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
   console.log(`settings updated: ${settingsPath}`);
